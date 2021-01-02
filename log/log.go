@@ -1,4 +1,4 @@
-package gotrunks
+package log
 
 import (
 	"io"
