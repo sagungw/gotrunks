@@ -150,10 +150,9 @@ func From(pkg, fn string) Logger {
 // From adds package and function name where log funcs are called
 func from(c caller) Logger {
 	return GetLogger().WithFields(llog.Fields{
-		"package":  c.pkg,
-		"function": c.fn,
-		"file":     c.file,
-		"line":     c.line,
+		"pkg": c.pkg,
+		"fn":  c.fn,
+		"loc": fmt.Sprintf("%s:%d", c.file, c.line),
 	})
 }
 
