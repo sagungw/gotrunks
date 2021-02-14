@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	llog "github.com/sirupsen/logrus"
@@ -17,6 +19,13 @@ type Hook llog.Hook
 
 // Format :nodoc:
 type Format uint8
+
+type caller struct {
+	pkg  string
+	fn   string
+	file string
+	line int
+}
 
 // std logger instance
 var (
@@ -66,16 +75,8 @@ type Logger interface {
 	Errorf(string, ...interface{})
 	Fatal(...interface{})
 	Fatalf(string, ...interface{})
-}
-
-// Standard :nodoc:
-func Standard() Logger {
-	return std
-}
-
-// GetLogger is a function to get default logger
-func GetLogger() Logger {
-	return std.WithField("env", env)
+	WithField(k string, v interface{}) *llog.Entry
+	WithFields(fields llog.Fields) *llog.Entry
 }
 
 // SetOutput to change logger argsput
@@ -118,11 +119,34 @@ func AddHook(h Hook) {
 	std.Hooks.Add(h)
 }
 
-// From adds package and function name where log funcs are called
+// Standard :nodoc:
+func Standard() Logger {
+	return std
+}
+
+// GetLogger is a function to get default logger
+func GetLogger() Logger {
+	return std.WithField("env", env)
+}
+
 func From(pkg, fn string) Logger {
-	return std.WithFields(llog.Fields{
-		"package":  pkg,
-		"function": fn,
+	_, file, line, _ := runtime.Caller(1)
+	_, file = filepath.Split(file)
+	return from(caller{
+		pkg:  pkg,
+		fn:   fn,
+		line: line,
+		file: file,
+	})
+}
+
+// From adds package and function name where log funcs are called
+func from(c caller) Logger {
+	return GetLogger().WithFields(llog.Fields{
+		"package":  c.pkg,
+		"function": c.fn,
+		"file":     c.file,
+		"line":     c.line,
 	})
 }
 
@@ -184,4 +208,12 @@ func Fatal(args ...interface{}) {
 // Fatalf is an alias method to the logger implementaion
 func Fatalf(format string, args ...interface{}) {
 	GetLogger().Fatalf(format, args...)
+}
+
+func WithField(k string, v interface{}) *llog.Entry {
+	return GetLogger().WithField(k, v)
+}
+
+func WithFields(fields llog.Fields) *llog.Entry {
+	return GetLogger().WithFields(fields)
 }
