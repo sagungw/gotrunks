@@ -1,7 +1,10 @@
 package log
 
 import (
+	"fmt"
 	"io"
+	"os"
+	"strings"
 
 	llog "github.com/sirupsen/logrus"
 )
@@ -78,6 +81,16 @@ func GetLogger() Logger {
 // SetOutput to change logger argsput
 func SetOutput(w io.Writer) {
 	std.Out = w
+}
+
+func SetOuputToFile(identifier string) error {
+	file, err := os.OpenFile(fmt.Sprintf("%s.log", strings.ReplaceAll(identifier, " ", "-")), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		return err
+	}
+
+	std.Out = file
+	return nil
 }
 
 // SetLevel of the logger
