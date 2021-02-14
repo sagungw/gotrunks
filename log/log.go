@@ -85,7 +85,14 @@ func SetOutput(w io.Writer) {
 }
 
 func SetOuputToFile(identifier string) error {
-	file, err := os.OpenFile(fmt.Sprintf("%s.log", strings.ReplaceAll(identifier, " ", "-")), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if _, err := os.Stat("./logs"); os.IsNotExist(err) {
+		err := os.Mkdir("./logs", os.ModePerm)
+		if err != nil {
+			return err
+		}
+	}
+
+	file, err := os.OpenFile(fmt.Sprintf("./logs/%s.log", strings.ReplaceAll(identifier, " ", "-")), os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
 	if err != nil {
 		return err
 	}
