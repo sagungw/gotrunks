@@ -1,225 +1,124 @@
 package log
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
-	"path/filepath"
 	"runtime"
-	"strings"
-
-	llog "github.com/sirupsen/logrus"
 )
 
-// Level is an alias type to the logger implementaion
-type Level llog.Level
-
-// Hook :nodoc:
-type Hook llog.Hook
-
-// Format :nodoc:
-type Format uint8
-
-type caller struct {
-	pkg  string
-	fn   string
-	file string
-	line int
+type handler struct {
+	next              slog.Handler
+	contextAttributes []*contextAttribute
 }
 
-// std logger instance
-var (
-	std = llog.New()
-	env = "unknown"
-)
+func InitLogger(configOpts ...HandlerConfigFunc) *slog.Logger {
+	handlerConfig := &handlerConfig{
+		writer: os.Stdout,
+		level:  slog.LevelInfo,
+	}
 
-const (
-	// PanicLevel level, highest level of severity. Logs and then calls panic with the
-	// message passed to Debug, Info, ...
-	PanicLevel = Level(llog.PanicLevel)
-	// FatalLevel level. Logs and then calls `os.Exit(1)`. It will exit even if the
-	// logging level is set to Panic.
-	FatalLevel = Level(llog.FatalLevel)
-	// ErrorLevel level. Logs. Used for errors that should definitely be noted.
-	// Commonly used for hooks to send errors to an error tracking service.
-	ErrorLevel = Level(llog.ErrorLevel)
-	// WarnLevel level. Non-critical entries that deserve eyes.
-	WarnLevel = Level(llog.WarnLevel)
-	// InfoLevel level. General operational entries about what's going on inside the
-	// application.
-	InfoLevel = Level(llog.InfoLevel)
-	// DebugLevel level. Usually only enabled when debugging. Very verbose logging.
-	DebugLevel = Level(llog.DebugLevel)
-)
+	for _, opt := range configOpts {
+		opt(handlerConfig)
+	}
 
-const (
-	_ Format = iota
-	// JSONFormat iota
-	JSONFormat
-	// TextFormat iota
-	TextFormat
-)
+	logger := slog.New(&handler{
+		next: slog.NewJSONHandler(handlerConfig.writer, &slog.HandlerOptions{
+			Level: handlerConfig.level,
+		}),
+		contextAttributes: handlerConfig.contextAttributes,
+	})
 
-// Logger is an interface for general logging
-type Logger interface {
-	Print(...interface{})
-	Println(...interface{})
-	Printf(string, ...interface{})
-	Debug(...interface{})
-	Debugf(string, ...interface{})
-	Info(...interface{})
-	Infof(string, ...interface{})
-	Warn(...interface{})
-	Warnf(string, ...interface{})
-	Error(...interface{})
-	Errorf(string, ...interface{})
-	Fatal(...interface{})
-	Fatalf(string, ...interface{})
-	WithField(k string, v interface{}) *llog.Entry
-	WithFields(fields llog.Fields) *llog.Entry
+	slog.SetDefault(logger)
+
+	return logger
 }
 
-// SetOutput to change logger argsput
-func SetOutput(w io.Writer) {
-	std.Out = w
+func (h *handler) Enabled(ctx context.Context, l slog.Level) bool {
+	return h.next.Enabled(ctx, l)
 }
 
-func SetOuputToFile(identifier string) error {
-	if _, err := os.Stat("./logs"); os.IsNotExist(err) {
-		err := os.Mkdir("./logs", os.ModePerm)
-		if err != nil {
-			return err
+func (h *handler) Handle(ctx context.Context, r slog.Record) error {
+	frs := runtime.CallersFrames([]uintptr{r.PC})
+	fr, _ := frs.Next()
+	if fr.Function != "" {
+		r.AddAttrs(slog.String("func", fr.Function))
+		r.AddAttrs(slog.String("file", fmt.Sprintf("%s:%d", fr.File, fr.Line)))
+	}
+
+	h.addContextAttributes(ctx, &r)
+
+	return h.next.Handle(ctx, r)
+}
+
+func (h *handler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &handler{next: h.next.WithAttrs(attrs)}
+}
+
+func (h *handler) WithGroup(name string) slog.Handler {
+	return &handler{next: h.next.WithGroup(name)}
+}
+
+func (h *handler) addContextAttributes(ctx context.Context, r *slog.Record) {
+	for _, ca := range h.contextAttributes {
+		val := ctx.Value(ca.contextKey)
+		switch v := val.(type) {
+		case string:
+			if v != "" {
+				r.AddAttrs(slog.String(ca.logKey, v))
+			}
+		case int64:
+			r.AddAttrs(slog.Int64(ca.logKey, v))
+		case int:
+			r.AddAttrs(slog.Int(ca.logKey, v))
+		case float64:
+			r.AddAttrs(slog.Float64(ca.logKey, v))
 		}
 	}
-
-	file, err := os.OpenFile(fmt.Sprintf("./logs/%s.log", strings.ReplaceAll(identifier, " ", "-")), os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
-	if err != nil {
-		return err
-	}
-
-	std.Out = file
-	return nil
 }
 
-// SetLevel of the logger
-func SetLevel(level Level) {
-	std.Level = llog.Level(level)
+type handlerConfig struct {
+	writer            io.Writer
+	level             slog.Level
+	contextAttributes []*contextAttribute
 }
 
-// SetEnv :nodoc:
-func SetEnv(e string) {
-	env = e
+type contextAttribute struct {
+	logKey     string
+	contextKey any
 }
 
-// SetFormat for the logger
-func SetFormat(format Format) {
-	switch format {
-	case JSONFormat:
-		std.Formatter = &llog.JSONFormatter{}
-	default:
-		std.Formatter = &llog.TextFormatter{}
+type HandlerConfigFunc func(cfg *handlerConfig)
+
+func WithWriter(w io.Writer) HandlerConfigFunc {
+	return func(cfg *handlerConfig) {
+		cfg.writer = w
 	}
 }
 
-// AddHook to Standard Logger
-func AddHook(h Hook) {
-	std.Hooks.Add(h)
+func WithLevel(level string) HandlerConfigFunc {
+	return func(cfg *handlerConfig) {
+		logLevel := cfg.level
+		err := logLevel.UnmarshalText([]byte(level))
+		if err != nil {
+			return
+		}
+
+		cfg.level = logLevel
+	}
 }
 
-// Standard :nodoc:
-func Standard() Logger {
-	return std
-}
+func WithContextAttribute(logKey string, contextKey any) HandlerConfigFunc {
+	return func(cfg *handlerConfig) {
+		if cfg.contextAttributes == nil {
+			cfg.contextAttributes = []*contextAttribute{}
+		}
 
-// GetLogger is a function to get default logger
-func GetLogger() Logger {
-	return std.WithField("env", env)
-}
-
-func From(pkg, fn string) Logger {
-	_, file, line, _ := runtime.Caller(1)
-	_, file = filepath.Split(file)
-	return from(caller{
-		pkg:  pkg,
-		fn:   fn,
-		line: line,
-		file: file,
-	})
-}
-
-// From adds package and function name where log funcs are called
-func from(c caller) Logger {
-	return GetLogger().WithFields(llog.Fields{
-		"pkg": c.pkg,
-		"fn":  c.fn,
-		"loc": fmt.Sprintf("%s:%d", c.file, c.line),
-	})
-}
-
-// Print is an alias method to the logger implementaion
-func Print(args ...interface{}) {
-	GetLogger().Print(args...)
-}
-
-// Printf is an alias method to the logger implementaion
-func Printf(format string, args ...interface{}) {
-	GetLogger().Printf(format, args...)
-}
-
-// Debug is an alias method to the logger implementaion
-func Debug(args ...interface{}) {
-	GetLogger().Debug(args...)
-}
-
-// Debugf is an alias method to the logger implementaion
-func Debugf(format string, args ...interface{}) {
-	GetLogger().Debugf(format, args...)
-}
-
-// Info is an alias method to the logger implementaion
-func Info(args ...interface{}) {
-	GetLogger().Info(args...)
-}
-
-// Infof is an alias method to the logger implementaion
-func Infof(format string, args ...interface{}) {
-	GetLogger().Infof(format, args...)
-}
-
-// Warn is an alias method to the logger implementaion
-func Warn(args ...interface{}) {
-	GetLogger().Warn(args...)
-}
-
-// Warnf is an alias method to the logger implementaion
-func Warnf(format string, args ...interface{}) {
-	GetLogger().Warnf(format, args...)
-}
-
-// Error is an alias method to the logger implementaion
-func Error(args ...interface{}) {
-	GetLogger().Error(args...)
-}
-
-// Errorf is an alias method to the logger implementaion
-func Errorf(format string, args ...interface{}) {
-	GetLogger().Errorf(format, args...)
-}
-
-// Fatal is an alias method to the logger implementaion
-func Fatal(args ...interface{}) {
-	GetLogger().Fatal(args...)
-}
-
-// Fatalf is an alias method to the logger implementaion
-func Fatalf(format string, args ...interface{}) {
-	GetLogger().Fatalf(format, args...)
-}
-
-func WithField(k string, v interface{}) *llog.Entry {
-	return GetLogger().WithField(k, v)
-}
-
-func WithFields(fields llog.Fields) *llog.Entry {
-	return GetLogger().WithFields(fields)
+		cfg.contextAttributes = append(cfg.contextAttributes, &contextAttribute{
+			logKey:     logKey,
+			contextKey: contextKey,
+		})
+	}
 }
