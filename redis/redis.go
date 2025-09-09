@@ -4,7 +4,6 @@ import (
 	"net/url"
 	"strconv"
 
-	_ "github.com/go-viper/mapstructure/v2"
 	"github.com/redis/go-redis/v9"
 )
 
